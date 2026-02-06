@@ -4,11 +4,10 @@ A JAX-compatible Python implementation of a Deterministic Finite Automaton (DFA)
 
 ## Installation
 
-This package will soon be made pip-installable. In the meantime, pull the repo and and install locally.
+Install using pip.
 
 ```
-git clone https://github.com/rad-dfa/dfax.git
-pip install -e dfax
+pip install dfax
 ```
 
 ## Usage
