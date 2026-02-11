@@ -7,6 +7,23 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 
+def dfax2prompt(dfax: DFAx):
+    _prompt = "DFA\n"
+    _prompt += "STATES: " + ", ".join(f"S{i}" for i in range(dfax.n_states)) + "\n"
+    _prompt += "TOKENS: " + ", ".join(f"T{i}" for i in range(dfax.n_tokens)) + "\n"
+    _prompt += "INIT_STATE: " + str(dfax.start) + "\n"
+    _prompt += "ACCEPTING_STATES: " + ", ".join(f"S{i}" for i in range(dfax.n_states) if dfax.labels[i]) + "\n"
+    _prompt += "TRANSITIONS:\n"
+    for s in range(dfax.n_states):
+        for a in range(dfax.n_tokens):
+            t = dfax.transitions[s, a]
+            if s != t:
+                _prompt += f"    S{s} -T{a}-> S{t}\n"
+    _prompt += "    For every state Si and token Tj not listed above, the transition goes back to the same state:\n"
+    _prompt += "        Si -Tj-> Si for all other state-token pairs.\n"
+    return _prompt
+
+
 def dfa2dfax(dfa: DFA) -> DFAx:
     states = dfa.states()
     inputs = dfa.inputs

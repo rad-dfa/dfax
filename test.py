@@ -2,7 +2,7 @@ import jax
 import random
 import jax.numpy as jnp
 from dfax import dfa2dfax, dfax2dfa, DFAx
-from dfax.utils import visualize
+from dfax.utils import visualize, dfax2prompt
 from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler
 
 
@@ -12,11 +12,12 @@ sampler = ReachAvoidSampler(max_size=5, p=None)
 # sampler = ReachSampler()
 # sampler = ReachAvoidSampler()
 
-n = 1_000
+n = 100
 
 for i in range(n):
 	key, subkey = jax.random.split(key)
 	dfax = sampler.sample(subkey)
+	_prompt = dfax2prompt(dfax)
 	dfa = dfax2dfa(dfax)
 
 	inputs = list(dfa.inputs)
