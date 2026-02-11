@@ -24,6 +24,69 @@ def dfax2prompt(dfax: DFAx):
     return _prompt
 
 
+def prompt2dfax(prompt: str) -> DFAx:
+    lines = prompt.strip().split('\n')
+
+    n_states = 0
+    n_tokens = 0
+    start = 0
+    accepting_states = set()
+    transitions_list = []
+
+    for line in lines:
+        line = line.strip()
+
+        if line.startswith("STATES:"):
+            states_str = line.replace("STATES:", "").strip()
+            state_list = [s.strip() for s in states_str.split(",")]
+            n_states = len(state_list)
+
+        elif line.startswith("TOKENS:"):
+            tokens_str = line.replace("TOKENS:", "").strip()
+            token_list = [t.strip() for t in tokens_str.split(",")]
+            n_tokens = len(token_list)
+
+        elif line.startswith("INIT_STATE:"):
+            init_str = line.replace("INIT_STATE:", "").strip()
+            start = int(init_str.replace("S", ""))
+
+        elif line.startswith("ACCEPTING_STATES:"):
+            accept_str = line.replace("ACCEPTING_STATES:", "").strip()
+            if accept_str:  # Not empty
+                accept_list = [s.strip() for s in accept_str.split(",")]
+                for state_str in accept_list:
+                    state_idx = int(state_str.replace("S", ""))
+                    accepting_states.add(state_idx)
+
+        elif " -T" in line and "-> S" in line and "Si" not in line and "Tj" not in line:
+            # Parse transition: S0 -T0-> S1
+            parts = line.split(" -")
+            source = int(parts[0].replace("S", ""))
+            rest = parts[1].split("-> ")
+            token = int(rest[0].replace("T", ""))
+            target = int(rest[1].replace("S", ""))
+            transitions_list.append((source, token, target))
+
+    # Build labels array
+    labels = jnp.array([i in accepting_states for i in range(n_states)])
+
+    # Build transitions matrix (n_states x n_tokens, default to self-loops)
+    transitions_matrix = jnp.zeros((n_states, n_tokens), dtype=jnp.int32)
+    for s in range(n_states):
+        for t in range(n_tokens):
+            transitions_matrix = transitions_matrix.at[s, t].set(s)
+
+    # Set parsed transitions
+    for source, token, target in transitions_list:
+        transitions_matrix = transitions_matrix.at[source, token].set(target)
+
+    return DFAx(
+        start=start,
+        transitions=transitions_matrix,
+        labels=labels
+    ).minimize()
+
+
 def dfa2dfax(dfa: DFA) -> DFAx:
     states = dfa.states()
     inputs = dfa.inputs

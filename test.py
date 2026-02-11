@@ -2,7 +2,7 @@ import jax
 import random
 import jax.numpy as jnp
 from dfax import dfa2dfax, dfax2dfa, DFAx
-from dfax.utils import visualize, dfax2prompt
+from dfax.utils import visualize, dfax2prompt, prompt2dfax
 from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler
 
 
@@ -17,7 +17,9 @@ n = 100
 for i in range(n):
 	key, subkey = jax.random.split(key)
 	dfax = sampler.sample(subkey)
-	_prompt = dfax2prompt(dfax)
+	prompt = dfax2prompt(dfax)
+	_dfax = prompt2dfax(prompt)
+	assert dfax == _dfax, f"Original and reconstructed DFAx do not match for sample {i + 1}."
 	dfa = dfax2dfa(dfax)
 
 	inputs = list(dfa.inputs)

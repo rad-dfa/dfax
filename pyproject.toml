@@ -1,6 +1,6 @@
 [project]
 name = "dfax"
-version = "0.1.4"
+version = "0.1.6"
 description = "Python library for modeling DFAs, Moore Machines, and Transition Systems in JAX."
 authors = [
     { name = "Beyazit Yalcinkaya", email = "beyazit@berkeley.edu" }
