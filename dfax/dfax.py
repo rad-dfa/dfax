@@ -69,6 +69,10 @@ class _DFAx:
 
         return jnp.logical_and(start_eq, jnp.logical_and(transitions_eq, labels_eq))
 
+    def __hash__(self) -> int:
+        from dfax import dfax2dfa
+        dfa = dfax2dfa(self)
+        return dfa.__hash__()
 
     @jax.jit
     def advance(self, symbol: int) -> "DFAx":
