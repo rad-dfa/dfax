@@ -2,8 +2,8 @@ import jax
 import random
 import jax.numpy as jnp
 from dfax import dfa2dfax, dfax2dfa, DFAx
-from dfax.utils import visualize, dfax2prompt, prompt2dfax
-from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler
+from dfax.utils import visualize, dfax2prompt, prompt2dfax, data2sampler
+from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler, DataSampler
 
 
 key = jax.random.PRNGKey(0)
@@ -11,6 +11,7 @@ key = jax.random.PRNGKey(0)
 sampler = ReachAvoidSampler(max_size=5, p=None)
 # sampler = ReachSampler()
 # sampler = ReachAvoidSampler()
+# sampler = data2sampler("dataset.pkl")
 
 n = 100
 
@@ -25,6 +26,9 @@ for i in range(n):
 	inputs = list(dfa.inputs)
 
 	w = dfa.find_word()
+
+	if w is None:
+		continue
 
 	for a in w:
 		dfa = dfa.advance([a]).minimize()

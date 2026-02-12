@@ -1,8 +1,8 @@
 import jax
 import chex
+from dfax import DFAx
 import jax.numpy as jnp
 from flax import struct
-from dfax import DFAx
 from functools import partial
 
 
@@ -29,6 +29,46 @@ class DFASampler:
             return jax.random.randint(key, (), lower_bound, self.max_size + 1)
 
     @partial(jax.jit, static_argnums=(0,))
+    def trivial(self, label):
+        start = 0
+        transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
+        labels = jnp.zeros((self.max_size,), dtype=bool).at[start].set(label)
+        return DFAx(start=start,
+                     transitions=transitions,
+                     labels=labels)
+
+
+# Precomputed data sampler -- initialize using data2sampler utility function
+@struct.dataclass
+class DataSampler(DFASampler):
+    dfax_array: DFAx = None
+    embd_array: jnp.ndarray = None
+    max_size: int = struct.field(pytree_node=False)  # Mark as static
+    n_tokens: int = struct.field(pytree_node=False)  # Mark as static
+
+    @jax.jit
+    def sample(self, key: chex.PRNGKey) -> DFAx:
+        idx = jax.random.randint(key, (), 0, self.dfax_array.labels.shape[0])
+        return jax.tree_map(lambda x: x[idx], self.dfax_array)
+
+    @jax.jit
+    def embed(self, dfax: DFAx) -> jnp.ndarray:
+        start_match = self.dfax_array.start == dfax.start
+        transitions_match = jnp.all(
+            self.dfax_array.transitions == dfax.transitions,
+            axis=(1, 2)
+        )
+        labels_match = jnp.all(
+            self.dfax_array.labels == dfax.labels,
+            axis=1
+        )
+
+        full_match = start_match & transitions_match & labels_match
+        idx = jnp.argmax(full_match)
+
+        return self.embd_array[idx]
+
+    @jax.jit
     def trivial(self, label):
         start = 0
         transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))

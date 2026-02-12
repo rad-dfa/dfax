@@ -1,10 +1,26 @@
 import jax
+import dill
 from dfa import DFA
 from dfax import DFAx
 import networkx as nx
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from dfax.samplers import DataSampler
+
+
+def data2sampler(data_path: str) -> DataSampler:
+
+    with open(data_path, "rb") as f:
+        data = dill.load(f)
+
+    dfax_list = list(data.keys())
+    dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
+    dfax = dfax_list[0]
+
+    embd_array = jnp.array([v[1] for v in data.values()])
+
+    return DataSampler(n_tokens=dfax.n_tokens, max_size=dfax.max_n_states, dfax_array=dfax_array, embd_array=embd_array)
 
 
 def dfax2prompt(dfax: DFAx):
