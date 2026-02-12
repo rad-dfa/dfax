@@ -19,8 +19,9 @@ def data2sampler(data_path: str) -> DataSampler:
     dfax = dfax_list[0]
 
     embd_array = jnp.array([v[1] for v in data.values()])
+    embd_dim = embd_array[0].size
 
-    return DataSampler(n_tokens=dfax.n_tokens, max_size=dfax.max_n_states, dfax_array=dfax_array, embd_array=embd_array)
+    return DataSampler(n_tokens=dfax.n_tokens, max_size=dfax.max_n_states, embd_dim=embd_dim, dfax_array=dfax_array, embd_array=embd_array)
 
 
 def dfax2prompt(dfax: DFAx):

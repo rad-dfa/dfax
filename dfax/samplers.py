@@ -43,6 +43,7 @@ class DFASampler:
 class DataSampler(DFASampler):
     dfax_array: DFAx = None
     embd_array: jnp.ndarray = None
+    embd_dim: int = 32
     max_size: int = struct.field(pytree_node=False)  # Mark as static
     n_tokens: int = struct.field(pytree_node=False)  # Mark as static
 
