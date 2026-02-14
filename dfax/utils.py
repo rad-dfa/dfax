@@ -15,6 +15,12 @@ def data2sampler(data_path: str) -> DataSampler:
         data = dill.load(f)
 
     dfax_list = list(data.keys())
+
+    # Find the maximum number of states among the stored DFAx objects and
+    # expand all DFAx instances to that size so they can be stacked.
+    max_n = max(int(d.max_n_states) for d in dfax_list)
+    dfax_list = [d.expand(max_n) for d in dfax_list]
+
     dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
     dfax = dfax_list[0]
 

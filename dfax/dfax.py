@@ -358,3 +358,21 @@ class _DFAx:
             jnp.where(is_accept, 1.0, jnp.where(is_sink, -1.0, 0.0))
         )
 
+    def expand(self, dim):
+        if self.max_n_states >= dim:
+            return DFAx(start=self.start,
+                        transitions=self.transitions,
+                        labels=self.labels)
+
+        # create self-loop rows for new states: each new state transitions to itself for all tokens
+        new_indices = jnp.arange(self.max_n_states, dim, dtype=self.transitions.dtype)
+        new_rows = jnp.tile(new_indices.reshape(-1, 1), (1, self.n_tokens))
+        transitions = jnp.concatenate([self.transitions, new_rows], axis=0)
+
+        # extend labels with False for new states
+        labels = jnp.concatenate([self.labels, jnp.zeros((dim - self.max_n_states,), dtype=bool)], axis=0)
+
+        return DFAx(start=self.start,
+                    transitions=transitions,
+                    labels=labels)
+
