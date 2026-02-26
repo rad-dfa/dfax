@@ -2,6 +2,7 @@ import jax
 import chex
 import jax.numpy as jnp
 from flax import struct
+from functools import partial
 
 
 @jax.jit
@@ -68,6 +69,51 @@ class _DFAx:
         labels_eq = jnp.all(self.labels[:n] == other.labels[:n])
 
         return jnp.logical_and(start_eq, jnp.logical_and(transitions_eq, labels_eq))
+
+    @partial(jax.jit, static_argnames="op")
+    def _binary_op(self, other: "DFAx", op) -> "DFAx":
+        assert self.n_tokens == other.n_tokens
+        s1, s2 = self.max_n_states, other.max_n_states
+        a = self.n_tokens
+        prod_start = self.start * s2 + other.start
+        t1, t2 = self.transitions[:, None, :], other.transitions[None, :, :]
+        prod_transitions = (t1 * s2 + t2).reshape((s1 * s2, a))
+        prod_labels = op(self.labels[:, None], other.labels[None, :]).reshape((s1 * s2,))
+        return DFAx(start=prod_start,
+                    transitions=prod_transitions,
+                    labels=prod_labels)
+
+    @jax.jit
+    def __and__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, jnp.logical_and)
+
+    @jax.jit
+    def __or__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, jnp.logical_or)
+
+    @jax.jit
+    def __xor__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, jnp.logical_xor)
+    
+    @jax.jit
+    def __invert__(self) -> "DFAx":
+        return DFAx(start=self.start,
+                    transitions=self.transitions,
+                    labels=jnp.logical_not(self.labels))
+    
+    @jax.jit
+    def __sub__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, lambda a, b: jnp.logical_and(a, jnp.logical_not(b)))
+    
+    def shrink(self) -> "DFAx":
+        is_reach = self.is_reach
+        reach_i = jnp.cumsum(is_reach.astype(jnp.int32)) - 1
+        start_reach = reach_i[self.start]
+        transitions_reach = reach_i[self.transitions[is_reach]]
+        labels_reach = self.labels[is_reach]
+        return DFAx(start=start_reach,
+                    transitions=transitions_reach,
+                    labels=labels_reach)
 
     def __hash__(self) -> int:
         from dfax import dfax2dfa
