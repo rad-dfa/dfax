@@ -33,9 +33,11 @@ class DFASampler:
         start = 0
         transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
         labels = jnp.zeros((self.max_size,), dtype=bool).at[start].set(label)
-        return DFAx(start=start,
-                     transitions=transitions,
-                     labels=labels)
+        return DFAx.create(
+            start=start,
+            transitions=transitions,
+            labels=labels
+        )
 
 
 # Precomputed data sampler -- initialize using data2sampler utility function
@@ -74,9 +76,11 @@ class DataSampler(DFASampler):
         start = 0
         transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
         labels = jnp.zeros((self.max_size,), dtype=bool).at[start].set(label)
-        return DFAx(start=start,
-                     transitions=transitions,
-                     labels=labels)
+        return DFAx.create(
+            start=start,
+            transitions=transitions,
+            labels=labels
+        )
 
 
 # Reach sampler
@@ -114,7 +118,11 @@ class ReachSampler(DFASampler):
             lambda _: jax.lax.fori_loop(0, n-1, body_fn, (transitions, labels, key)),
             operand=None
         )
-        return DFAx(start=0, transitions=transitions, labels=labels).minimize()
+        return DFAx.create(
+            start=0,
+            transitions=transitions,
+            labels=labels
+        ).minimize()
 
 
 # Reach-Avoid sampler
@@ -154,7 +162,11 @@ class ReachAvoidSampler(DFASampler):
             lambda _: jax.lax.fori_loop(0, n-2, body_fn, (transitions, labels, key)),
             operand=None
         )
-        return DFAx(start=0, transitions=transitions, labels=labels).minimize()
+        return DFAx.create(
+            start=0,
+            transitions=transitions,
+            labels=labels
+        ).minimize()
 
 
 # Reach-Avoid with random mutations
@@ -197,7 +209,11 @@ class RADSampler(DFASampler):
             lambda _: jax.lax.fori_loop(0, n-2, body_fn, (transitions, labels, key)),
             operand=None
         )
-        candidate = DFAx(start=0, transitions=transitions, labels=labels).minimize()
+        candidate = DFAx.create(
+            start=0,
+            transitions=transitions,
+            labels=labels
+        ).minimize()
 
         key, subkey = jax.random.split(key)
         n_mutations = jax.random.choice(subkey, self.max_mutations + 1)

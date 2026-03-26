@@ -5,40 +5,40 @@ from flax import struct
 from functools import partial
 
 
-@jax.jit
-def DFAx(start, transitions, labels):
-    n_states, n_tokens = transitions.shape
-    trans_flat = transitions.flatten()
-    is_reach_init = jnp.zeros((n_states,), dtype=bool).at[start].set(True)
-
-    def step(is_reach: jnp.ndarray) -> jnp.ndarray:
-        reach_repeat = jnp.repeat(is_reach, n_tokens)
-        dest_counts = jnp.zeros((n_states,), dtype=jnp.int32).at[trans_flat].add(reach_repeat)
-        return dest_counts > 0
-
-    def cond(pair):
-        prev_is_reach, curr_is_reach = pair
-        return jnp.any(prev_is_reach != curr_is_reach)
-
-    def body(pair):
-        prev_is_reach, curr_is_reach = pair
-        next_is_reach = step(curr_is_reach)
-        return (curr_is_reach, next_is_reach)
-
-    is_reach, _ = jax.lax.while_loop(cond, body, (is_reach_init, step(is_reach_init)))
-
-    return _DFAx(start=start,
-                 transitions=transitions,
-                 labels=labels,
-                 is_reach=is_reach)
-
-
 @struct.dataclass
-class _DFAx:
+class DFAx:
     start: int
     transitions: jnp.ndarray
     labels: jnp.ndarray
     is_reach: jnp.ndarray
+
+    @classmethod
+    @partial(jax.jit, static_argnames=("cls",))
+    def create(cls, start, transitions, labels):
+        n_states, n_tokens = transitions.shape
+        trans_flat = transitions.flatten()
+        is_reach_init = jnp.zeros((n_states,), dtype=bool).at[start].set(True)
+
+        def step(is_reach: jnp.ndarray) -> jnp.ndarray:
+            reach_repeat = jnp.repeat(is_reach, n_tokens)
+            dest_counts = jnp.zeros((n_states,), dtype=jnp.int32).at[trans_flat].add(reach_repeat)
+            return dest_counts > 0
+
+        def cond(pair):
+            prev_is_reach, curr_is_reach = pair
+            return jnp.any(prev_is_reach != curr_is_reach)
+
+        def body(pair):
+            prev_is_reach, curr_is_reach = pair
+            next_is_reach = step(curr_is_reach)
+            return (curr_is_reach, next_is_reach)
+
+        is_reach, _ = jax.lax.while_loop(cond, body, (is_reach_init, step(is_reach_init)))
+
+        return cls(start=start,
+                    transitions=transitions,
+                    labels=labels,
+                    is_reach=is_reach)
 
     @property
     def n_states(self):
@@ -79,9 +79,11 @@ class _DFAx:
         t1, t2 = self.transitions[:, None, :], other.transitions[None, :, :]
         prod_transitions = (t1 * s2 + t2).reshape((s1 * s2, a))
         prod_labels = op(self.labels[:, None], other.labels[None, :]).reshape((s1 * s2,))
-        return DFAx(start=prod_start,
-                    transitions=prod_transitions,
-                    labels=prod_labels)
+        return DFAx.create(
+            start=prod_start,
+            transitions=prod_transitions,
+            labels=prod_labels
+        )
 
     @jax.jit
     def __and__(self, other: "DFAx") -> "DFAx":
@@ -97,9 +99,11 @@ class _DFAx:
     
     @jax.jit
     def __invert__(self) -> "DFAx":
-        return DFAx(start=self.start,
-                    transitions=self.transitions,
-                    labels=jnp.logical_not(self.labels))
+        return DFAx.create(
+            start=self.start,
+            transitions=self.transitions,
+            labels=jnp.logical_not(self.labels)
+        )
     
     @jax.jit
     def __sub__(self, other: "DFAx") -> "DFAx":
@@ -124,7 +128,7 @@ class _DFAx:
 
         final_state, _ = jax.lax.scan(step, self.start, symbols)
 
-        return DFAx(
+        return DFAx.create(
             start=final_state,
             transitions=self.transitions,
             labels=self.labels
@@ -149,9 +153,11 @@ class _DFAx:
 
         transitions = self.transitions.at[s, a].set(t)
 
-        return DFAx(start=self.start,
-                    transitions=transitions,
-                    labels=self.labels)
+        return DFAx.create(
+            start=self.start,
+            transitions=transitions,
+            labels=self.labels
+        )
 
     @jax.jit
     def mutate_reject_lang(self, key: chex.PRNGKey) -> "DFAx":
@@ -180,9 +186,11 @@ class _DFAx:
 
         transitions = self.transitions.at[s, a].set(t)
 
-        return DFAx(start=self.start,
-                    transitions=transitions,
-                    labels=self.labels)
+        return DFAx.create(
+            start=self.start,
+            transitions=transitions,
+            labels=self.labels
+        )
 
     @jax.jit
     def sink_accepts(self) -> "DFAx":
@@ -192,7 +200,7 @@ class _DFAx:
         sink_indices = jnp.tile(jnp.arange(self.max_n_states).reshape(-1, 1), (1, self.n_tokens))
         transitions = jnp.where(replace_mask, sink_indices, self.transitions)
 
-        return DFAx(
+        return DFAx.create(
             start=self.start,
             transitions=transitions,
             labels=self.labels
@@ -203,9 +211,11 @@ class _DFAx:
         pruned_transitions = jnp.where(self.is_reach_tile, self.transitions, jnp.arange(self.max_n_states)[:, None])
         pruned_labels = jnp.where(self.is_reach, self.labels, False)
 
-        return DFAx(start=self.start,
-                    transitions=pruned_transitions,
-                    labels=pruned_labels)
+        return DFAx.create(
+            start=self.start,
+            transitions=pruned_transitions,
+            labels=pruned_labels
+        )
 
     @jax.jit
     def minimize(self) -> "DFAx":
@@ -275,9 +285,11 @@ class _DFAx:
         minimized_labels      = self.labels[block]
         minimized_transitions = block[self.transitions]
 
-        return DFAx(start=minimized_start,
-                    transitions=minimized_transitions,
-                    labels=minimized_labels)
+        return DFAx.create(
+            start=minimized_start,
+            transitions=minimized_transitions,
+            labels=minimized_labels
+        )
 
     @partial(jax.jit, static_argnames="max_length")
     def find_word(self, key: chex.PRNGKey, max_length: int = None) -> jnp.ndarray:
@@ -401,9 +413,11 @@ class _DFAx:
         transitions  = self.transitions.at[old_to_new].set(old_to_new[self.transitions])
         labels       = self.labels.at[old_to_new].set(self.labels)
 
-        return DFAx(start=start,
-                    transitions=transitions,
-                    labels=labels)
+        return DFAx.create(
+            start=start,
+            transitions=transitions,
+            labels=labels
+        )
 
     @jax.jit
     def to_graph(self):
@@ -477,15 +491,19 @@ class _DFAx:
         start_reach = reach_i[self.start]
         transitions_reach = reach_i[self.transitions[is_reach]]
         labels_reach = self.labels[is_reach]
-        return DFAx(start=start_reach,
-                    transitions=transitions_reach,
-                    labels=labels_reach)
+        return DFAx.create(
+            start=start_reach,
+            transitions=transitions_reach,
+            labels=labels_reach
+        )
 
     def expand(self, dim):
         if self.max_n_states >= dim:
-            return DFAx(start=self.start,
-                        transitions=self.transitions,
-                        labels=self.labels)
+            return DFAx.create(
+                start=self.start,
+                transitions=self.transitions,
+                labels=self.labels
+            )
 
         # create self-loop rows for new states: each new state transitions to itself for all tokens
         new_indices = jnp.arange(self.max_n_states, dim, dtype=self.transitions.dtype)
@@ -495,7 +513,9 @@ class _DFAx:
         # extend labels with False for new states
         labels = jnp.concatenate([self.labels, jnp.zeros((dim - self.max_n_states,), dtype=bool)], axis=0)
 
-        return DFAx(start=self.start,
-                    transitions=transitions,
-                    labels=labels)
+        return DFAx.create(
+            start=self.start,
+            transitions=transitions,
+            labels=labels
+        )
 

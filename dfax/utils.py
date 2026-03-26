@@ -103,7 +103,7 @@ def prompt2dfax(prompt: str) -> DFAx:
     for source, token, target in transitions_list:
         transitions_matrix = transitions_matrix.at[source, token].set(target)
 
-    return DFAx(
+    return DFAx.create(
         start=start,
         transitions=transitions_matrix,
         labels=labels
@@ -116,12 +116,11 @@ def dfa2dfax(dfa: DFA) -> DFAx:
     start = dfa.start
     transitions = jnp.array([[dfa._transition(s, a) for a in inputs] for s in states])
     labels = jnp.array([dfa._label(s) for s in states])
-    tmp = DFAx(
+    return DFAx.create(
         start=start,
         transitions=transitions,
         labels=labels
     )
-    return tmp
 
 
 def dfax2dfa(dfax: DFAx) -> DFA:
