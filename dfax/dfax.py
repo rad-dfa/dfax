@@ -2,6 +2,7 @@ import jax
 import chex
 import jax.numpy as jnp
 from flax import struct
+from functools import partial
 
 
 @jax.jit
@@ -69,21 +70,65 @@ class _DFAx:
 
         return jnp.logical_and(start_eq, jnp.logical_and(transitions_eq, labels_eq))
 
+    @partial(jax.jit, static_argnames="op")
+    def _binary_op(self, other: "DFAx", op) -> "DFAx":
+        assert self.n_tokens == other.n_tokens
+        s1, s2 = self.max_n_states, other.max_n_states
+        a = self.n_tokens
+        prod_start = self.start * s2 + other.start
+        t1, t2 = self.transitions[:, None, :], other.transitions[None, :, :]
+        prod_transitions = (t1 * s2 + t2).reshape((s1 * s2, a))
+        prod_labels = op(self.labels[:, None], other.labels[None, :]).reshape((s1 * s2,))
+        return DFAx(start=prod_start,
+                    transitions=prod_transitions,
+                    labels=prod_labels)
+
+    @jax.jit
+    def __and__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, jnp.logical_and)
+
+    @jax.jit
+    def __or__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, jnp.logical_or)
+
+    @jax.jit
+    def __xor__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, jnp.logical_xor)
+    
+    @jax.jit
+    def __invert__(self) -> "DFAx":
+        return DFAx(start=self.start,
+                    transitions=self.transitions,
+                    labels=jnp.logical_not(self.labels))
+    
+    @jax.jit
+    def __sub__(self, other: "DFAx") -> "DFAx":
+        return self._binary_op(other, lambda a, b: jnp.logical_and(a, jnp.logical_not(b)))
+
     def __hash__(self) -> int:
         from dfax import dfax2dfa
         dfa = dfax2dfa(self)
         return dfa.__hash__()
 
     @jax.jit
-    def advance(self, symbol: int) -> "DFAx":
-        return DFAx(
-            start=jnp.where(
+    def advance(self, symbols) -> "DFAx":
+        symbols = jnp.atleast_1d(symbols)
+
+        def step(state, symbol):
+            next_state = jnp.where(
                 jnp.logical_and(symbol >= 0, symbol < self.n_tokens),
-                self.transitions[self.start, symbol],
-                self.start
-            ),
+                self.transitions[state, symbol],
+                state
+            )
+            return next_state, None
+
+        final_state, _ = jax.lax.scan(step, self.start, symbols)
+
+        return DFAx(
+            start=final_state,
             transitions=self.transitions,
-            labels=self.labels)
+            labels=self.labels
+        )
 
     @jax.jit
     def mutate(self, key: chex.PRNGKey) -> "DFAx":
@@ -234,6 +279,74 @@ class _DFAx:
                     transitions=minimized_transitions,
                     labels=minimized_labels)
 
+    @partial(jax.jit, static_argnames="max_length")
+    def find_word(self, key: chex.PRNGKey, max_length: int = None) -> jnp.ndarray:
+        if max_length is None:
+            max_length = self.max_n_states
+
+        stack     = (-jnp.ones((max_length,), dtype=jnp.int32)).at[0].set(self.start)
+        stack_ptr = 1
+        visited   = jnp.zeros((max_length,), dtype=bool).at[self.start].set(True)
+        parent    = -jnp.ones((max_length,), dtype=jnp.int32)
+        token_to  = -jnp.ones((max_length,), dtype=jnp.int32)
+        depth     = jnp.zeros((max_length,), dtype=jnp.int32)
+        found     = -1
+        
+        def cond(carry):
+            _, stack_ptr, _, _, _, _, _, found = carry
+            return (stack_ptr > 0) & (found < 0)
+        
+        def body(carry):
+            key, stack_ptr, stack, visited, parent, token_to, depth, found = carry
+
+            stack_ptr    = stack_ptr - 1
+            state        = stack[stack_ptr]
+            curr_depth   = depth[state]
+
+            is_accepting = self.labels[state].astype(bool)
+            found        = jnp.where(is_accepting, state, found)
+
+            key, subkey  = jax.random.split(key)
+            token_order  = jax.random.permutation(subkey, self.n_tokens)
+            
+            def push(i, carry):
+                visited, stack, stack_ptr, parent, token_to, depth = carry
+                token = token_order[i]
+                ns    = self.transitions[state, token]
+
+                do_push   = ~is_accepting & (curr_depth < max_length) & ~visited[ns]
+                stack     = stack.at[stack_ptr].set(jnp.where(do_push, ns, stack[stack_ptr]))
+                stack_ptr = stack_ptr + do_push.astype(jnp.int32)
+                visited   = visited.at[ns].set(visited[ns] | do_push)
+                parent    = parent.at[ns].set(jnp.where(do_push, state, parent[ns]))
+                token_to  = token_to.at[ns].set(jnp.where(do_push, token, token_to[ns]))
+                depth     = depth.at[ns].set(jnp.where(do_push, curr_depth + 1, depth[ns]))
+
+                return visited, stack, stack_ptr, parent, token_to, depth
+
+            visited, stack, stack_ptr, parent, token_to, depth = jax.lax.fori_loop(
+                0, self.n_tokens, push, (visited, stack, stack_ptr, parent, token_to, depth)
+            )
+            
+            return key, stack_ptr, stack, visited, parent, token_to, depth, found
+        
+        _, _, _, _, parent, token_to, depth, found = jax.lax.while_loop(
+            cond, body, (key, stack_ptr, stack, visited, parent, token_to, depth, found)
+        )
+
+        word_length = depth[found]
+        word        = -jnp.ones((max_length,), dtype=jnp.int32)
+
+        def trace(i, carry):
+            word, state = carry
+            word  = word.at[word_length - 1 - i].set(token_to[state])
+            state = parent[state]
+            return word, state
+
+        word, _ = jax.lax.fori_loop(0, word_length, trace, (word, found))
+
+        return word
+
     @jax.jit
     def canonicalize(self) -> "DFAx":
         old_to_new = (-jnp.ones((self.max_n_states,), dtype=jnp.int32)).at[self.start].set(0)
@@ -357,6 +470,16 @@ class _DFAx:
             jnp.where(is_accept, 1.0, 0.0),
             jnp.where(is_accept, 1.0, jnp.where(is_sink, -1.0, 0.0))
         )
+
+    def shrink(self) -> "DFAx":
+        is_reach = self.is_reach
+        reach_i = jnp.cumsum(is_reach.astype(jnp.int32)) - 1
+        start_reach = reach_i[self.start]
+        transitions_reach = reach_i[self.transitions[is_reach]]
+        labels_reach = self.labels[is_reach]
+        return DFAx(start=start_reach,
+                    transitions=transitions_reach,
+                    labels=labels_reach)
 
     def expand(self, dim):
         if self.max_n_states >= dim:
