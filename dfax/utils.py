@@ -111,9 +111,9 @@ def prompt2dfax(prompt: str) -> DFAx:
 
 
 def dfa2dfax(dfa: DFA) -> DFAx:
-    states = dfa.states()
-    inputs = dfa.inputs
-    start = dfa.start
+    states = list(dfa.states())
+    inputs = list(dfa.inputs)
+    start = states.index(dfa.start)
     transitions = jnp.array([[dfa._transition(s, a) for a in inputs] for s in states])
     labels = jnp.array([dfa._label(s) for s in states])
     return DFAx.create(

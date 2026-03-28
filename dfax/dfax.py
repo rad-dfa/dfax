@@ -219,7 +219,7 @@ class DFAx:
 
     @jax.jit
     def minimize(self) -> "DFAx":
-        return self.naivePR().prune().canonicalize()
+        return self.naivePR().prune().normalize()
 
     @jax.jit
     def naivePR(self) -> "DFAx":
@@ -360,7 +360,7 @@ class DFAx:
         return word
 
     @jax.jit
-    def canonicalize(self) -> "DFAx":
+    def normalize(self) -> "DFAx":
         old_to_new = (-jnp.ones((self.max_n_states,), dtype=jnp.int32)).at[self.start].set(0)
         visited    = jnp.zeros((self.max_n_states,), dtype=bool).at[self.start].set(True)
         queue      = (-jnp.ones((self.max_n_states,), dtype=jnp.int32)).at[0].set(self.start)

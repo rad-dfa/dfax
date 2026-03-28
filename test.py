@@ -37,7 +37,7 @@ def test_prompt_and_advance(sampler):
 		for a in w:
 			dfa = dfa.advance([a]).minimize()
 			dfax = dfax.advance(a).minimize()
-			assert dfax == dfa2dfax(dfa).canonicalize()
+			assert dfax == dfa2dfax(dfa).normalize()
 			assert dfax.reward() == dfa2dfax(dfa).reward()
 			assert dfax2dfa(dfax) == dfa
 
