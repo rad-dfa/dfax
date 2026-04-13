@@ -111,6 +111,7 @@ def prompt2dfax(prompt: str) -> DFAx:
 
 
 def dfa2dfax(dfa: DFA) -> DFAx:
+    dfa = dfa.normalize() # Check equivalence up to a state renaming.
     states = list(dfa.states())
     inputs = list(dfa.inputs)
     start = states.index(dfa.start)

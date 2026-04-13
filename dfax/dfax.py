@@ -58,15 +58,18 @@ class DFAx:
 
     @jax.jit
     def __eq__(self, other: "DFAx") -> jnp.ndarray:
-        n = min(self.max_n_states, other.max_n_states)
+        self_norm = self.normalize()
+        other_norm = other.normalize()
 
-        start_eq = (self.start == other.start)
+        n = min(self_norm.max_n_states, other_norm.max_n_states)
+
+        start_eq = (self_norm.start == other_norm.start)
         transitions_eq = jnp.where(
-            self.n_tokens == other.n_tokens,
-            jnp.all(self.transitions[:n] == other.transitions[:n]),
+            self_norm.n_tokens == other_norm.n_tokens,
+            jnp.all(self_norm.transitions[:n] == other_norm.transitions[:n]),
             False
         )
-        labels_eq = jnp.all(self.labels[:n] == other.labels[:n])
+        labels_eq = jnp.all(self_norm.labels[:n] == other_norm.labels[:n])
 
         return jnp.logical_and(start_eq, jnp.logical_and(transitions_eq, labels_eq))
 
