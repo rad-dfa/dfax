@@ -17,7 +17,8 @@ Create DFAs by specifying a `start` state, `transitions` matrix, which is max nu
 ```python
 from dfax import DFAx
 
-dfax = DFAx(
+# Use the static class constructor to create a DFAx object
+dfax = DFAx.create(
 	start=0, # State referred to as 0 is the initial state
 	transitions=jnp.array([
 		[1, 2, 0, 0, 0],
