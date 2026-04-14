@@ -10,6 +10,7 @@ from functools import partial
 @struct.dataclass
 class DFASampler:
     n_tokens: int = 10
+    min_size: int = 3
     max_size: int = 10
     p: float | None = None
 
@@ -17,16 +18,16 @@ class DFASampler:
     def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
         raise NotImplementedError
 
-    @partial(jax.jit, static_argnums=(0, 2))
-    def sample_n(self, key: chex.PRNGKey, lower_bound: int = 2):
+    @partial(jax.jit, static_argnums=(0,))
+    def sample_n(self, key: chex.PRNGKey):
         if self.p is not None:
-            values = jnp.arange(lower_bound, self.max_size + 1)
+            values = jnp.arange(self.min_size, self.max_size + 1)
             weights = self.p ** values
             weights = weights / jnp.sum(weights)
             idx = jax.random.choice(key, values, p=weights)
             return idx
         else:
-            return jax.random.randint(key, (), lower_bound, self.max_size + 1)
+            return jax.random.randint(key, (), self.min_size, self.max_size + 1)
 
     @partial(jax.jit, static_argnums=(0,))
     def trivial(self, label):
@@ -46,6 +47,7 @@ class DataSampler(DFASampler):
     dfax_array: DFAx = None
     embd_array: jnp.ndarray = None
     embd_dim: int = 32
+    min_size: int = struct.field(pytree_node=False)  # Mark as static
     max_size: int = struct.field(pytree_node=False)  # Mark as static
     n_tokens: int = struct.field(pytree_node=False)  # Mark as static
 
@@ -130,13 +132,14 @@ class DataSampler(DFASampler):
 @struct.dataclass
 class ReachSampler(DFASampler):
     prob_stutter: float = 0.9
+    min_size: int = 2
 
     @partial(jax.jit, static_argnums=(0,))
     def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
         if accept_set is not None or reject_set is not None:
             raise NotImplementedError("Conditioned sampling not implemented for ReachSampler.")
         key, subkey = jax.random.split(key)
-        n = self.sample_n(subkey, lower_bound=2)
+        n = self.sample_n(subkey)
         success = n-1
         transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
         labels = jnp.zeros(self.max_size, dtype=bool)
@@ -180,7 +183,7 @@ class ReachAvoidSampler(DFASampler):
         if accept_set is not None or reject_set is not None:
             raise NotImplementedError("Conditioned sampling not implemented for ReachAvoidSampler.")
         key, subkey = jax.random.split(key)
-        n = self.sample_n(subkey, lower_bound=3)
+        n = self.sample_n(subkey)
         success, fail = n-2, n-1
         transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
         labels = jnp.zeros(self.max_size, dtype=bool)
@@ -228,7 +231,7 @@ class RADSampler(DFASampler):
         if accept_set is not None or reject_set is not None:
             raise NotImplementedError("Conditioned sampling not implemented for RADSampler.")
         key, subkey = jax.random.split(key)
-        n = self.sample_n(subkey, lower_bound=3)
+        n = self.sample_n(subkey)
         success, fail = n-2, n-1
         transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
         labels = jnp.zeros(self.max_size, dtype=bool)
