@@ -14,7 +14,7 @@ class DFASampler:
     p: float | None = None
 
     @partial(jax.jit, static_argnums=(0,))
-    def sample(self, key: chex.PRNGKey) -> DFAx:
+    def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
         raise NotImplementedError
 
     @partial(jax.jit, static_argnums=(0, 2))
@@ -50,8 +50,51 @@ class DataSampler(DFASampler):
     n_tokens: int = struct.field(pytree_node=False)  # Mark as static
 
     @jax.jit
-    def sample(self, key: chex.PRNGKey) -> DFAx:
-        idx = jax.random.randint(key, (), 0, self.dfax_array.labels.shape[0])
+    def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
+
+        if accept_set is None and reject_set is None:
+            idx = jax.random.randint(key, (), 0, self.dfax_array.labels.shape[0])
+        else:
+            def accepts(dfax: DFAx, w: jnp.ndarray):
+                final = dfax.advance(w)
+                return final.labels[final.start]
+
+            def accepts_all(dfax: DFAx, strings: jnp.ndarray):
+                return jnp.all(jax.vmap(lambda w: accepts(dfax, w))(strings))
+
+            def rejects_all(dfax: DFAx, strings: jnp.ndarray):
+                return jnp.all(jax.vmap(lambda w: ~accepts(dfax, w))(strings))
+
+            accept_mask = (
+                jax.vmap(lambda d: accepts_all(d, accept_set))(self.dfax_array)
+                if accept_set is not None
+                else jnp.ones(self.dfax_array.labels.shape[0], dtype=bool)
+            )
+
+            reject_mask = (
+                jax.vmap(lambda d: rejects_all(d, reject_set))(self.dfax_array)
+                if reject_set is not None
+                else jnp.ones(self.dfax_array.labels.shape[0], dtype=bool)
+            )
+
+            valid_mask = accept_mask & reject_mask
+
+            def sample_valid(_):
+                probs = valid_mask / jnp.sum(valid_mask)
+                return jax.random.choice(key, self.dfax_array.labels.shape[0], p=probs)
+
+            def return_trivial(_):
+                rejecting_dfax_mask = jax.vmap(lambda dfax: jnp.logical_and(jnp.logical_not(dfax.labels[dfax.start]), dfax.n_states == 1))(self.dfax_array)
+                probs = rejecting_dfax_mask / jnp.sum(rejecting_dfax_mask)
+                return jax.random.choice(key, self.dfax_array.labels.shape[0], p=probs)
+
+            idx = jax.lax.cond(
+                jnp.any(valid_mask),
+                sample_valid,
+                return_trivial,
+                operand=None
+            )
+
         return jax.tree_map(lambda x: x[idx], self.dfax_array)
 
     @jax.jit
@@ -89,7 +132,9 @@ class ReachSampler(DFASampler):
     prob_stutter: float = 0.9
 
     @partial(jax.jit, static_argnums=(0,))
-    def sample(self, key: chex.PRNGKey) -> DFAx:
+    def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
+        if accept_set is not None or reject_set is not None:
+            raise NotImplementedError("Conditioned sampling not implemented for ReachSampler.")
         key, subkey = jax.random.split(key)
         n = self.sample_n(subkey, lower_bound=2)
         success = n-1
@@ -131,7 +176,9 @@ class ReachAvoidSampler(DFASampler):
     prob_stutter: float = 0.9
 
     @partial(jax.jit, static_argnums=(0,))
-    def sample(self, key: chex.PRNGKey) -> DFAx:
+    def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
+        if accept_set is not None or reject_set is not None:
+            raise NotImplementedError("Conditioned sampling not implemented for ReachAvoidSampler.")
         key, subkey = jax.random.split(key)
         n = self.sample_n(subkey, lower_bound=3)
         success, fail = n-2, n-1
@@ -177,7 +224,9 @@ class RADSampler(DFASampler):
     max_mutations: int = 5
 
     @partial(jax.jit, static_argnums=(0,))
-    def sample(self, key: chex.PRNGKey) -> DFAx:
+    def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
+        if accept_set is not None or reject_set is not None:
+            raise NotImplementedError("Conditioned sampling not implemented for RADSampler.")
         key, subkey = jax.random.split(key)
         n = self.sample_n(subkey, lower_bound=3)
         success, fail = n-2, n-1
