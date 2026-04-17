@@ -93,7 +93,7 @@ class DataSampler(DFASampler):
                 operand=None
             )
 
-        return jax.tree_map(lambda x: x[idx], self.dfax_array)
+        return jax.tree.map(lambda x: x[idx], self.dfax_array)
 
     @jax.jit
     def embed(self, dfax: DFAx) -> jnp.ndarray:
@@ -114,7 +114,7 @@ class DataSampler(DFASampler):
 
     @jax.jit
     def trivial(self, label):
-        dfax = jax.tree_map(lambda x: x[0], self.dfax_array)
+        dfax = jax.tree.map(lambda x: x[0], self.dfax_array)
         start = 0
         transitions = jnp.tile(jnp.arange(dfax.max_n_states).reshape(-1, 1), (1, dfax.n_tokens))
         labels = jnp.zeros((dfax.max_n_states,), dtype=bool).at[start].set(label)

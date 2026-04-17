@@ -17,13 +17,13 @@ def data2sampler(data: str | dict | list) -> DataSampler:
         dfax_list = list(data.keys())
         max_n = max(int(d.max_n_states) for d in dfax_list)
         dfax_list = [d.expand(max_n) for d in dfax_list]
-        dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
+        dfax_array = jax.tree.map(lambda *xs: jnp.stack(xs), *dfax_list)
         embd_array = jnp.array([v[1] for v in data.values()])
     elif isinstance(data, list):
         dfax_list = data
         max_n = max(int(d.max_n_states) for d in dfax_list)
         dfax_list = [d.expand(max_n) for d in dfax_list]
-        dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
+        dfax_array = jax.tree.map(lambda *xs: jnp.stack(xs), *dfax_list)
         embd_array = None
     else:
         raise TypeError("Data must be a dict or list")
