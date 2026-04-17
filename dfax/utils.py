@@ -9,25 +9,25 @@ import matplotlib.patches as patches
 from dfax.samplers import DataSampler
 
 
-def data2sampler(data_path: str) -> DataSampler:
-
-    with open(data_path, "rb") as f:
-        data = dill.load(f)
-
-    dfax_list = list(data.keys())
-
-    # Find the maximum number of states among the stored DFAx objects and
-    # expand all DFAx instances to that size so they can be stacked.
-    max_n = max(int(d.max_n_states) for d in dfax_list)
-    dfax_list = [d.expand(max_n) for d in dfax_list]
-
-    dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
-    dfax = dfax_list[0]
-
-    embd_array = jnp.array([v[1] for v in data.values()])
-    embd_dim = embd_array[0].size
-
-    return DataSampler(n_tokens=dfax.n_tokens, max_size=dfax.max_n_states, embd_dim=embd_dim, dfax_array=dfax_array, embd_array=embd_array)
+def data2sampler(data: str | dict | list) -> DataSampler:
+    if isinstance(data, str):
+        with open(data_path, "rb") as f:
+            data = dill.load(f)
+    if isinstance(data, dict):
+        dfax_list = list(data.keys())
+        max_n = max(int(d.max_n_states) for d in dfax_list)
+        dfax_list = [d.expand(max_n) for d in dfax_list]
+        dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
+        embd_array = jnp.array([v[1] for v in data.values()])
+    elif isinstance(data, list):
+        dfax_list = data
+        max_n = max(int(d.max_n_states) for d in dfax_list)
+        dfax_list = [d.expand(max_n) for d in dfax_list]
+        dfax_array = jax.tree_map(lambda *xs: jnp.stack(xs), *dfax_list)
+        embd_array = None
+    else:
+        raise TypeError("Data must be a dict or list")
+    return DataSampler(dfax_array=dfax_array, embd_array=embd_array)
 
 
 def dfax2prompt(dfax: DFAx):

@@ -309,7 +309,7 @@ wheels = [
 
 [[package]]
 name = "dfax"
-version = "0.1.15"
+version = "0.1.17"
 source = { editable = "." }
 dependencies = [
     { name = "chex" },

@@ -46,10 +46,6 @@ class DFASampler:
 class DataSampler(DFASampler):
     dfax_array: DFAx = None
     embd_array: jnp.ndarray = None
-    embd_dim: int = 32
-    min_size: int = struct.field(pytree_node=False)  # Mark as static
-    max_size: int = struct.field(pytree_node=False)  # Mark as static
-    n_tokens: int = struct.field(pytree_node=False)  # Mark as static
 
     @jax.jit
     def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
@@ -118,9 +114,10 @@ class DataSampler(DFASampler):
 
     @jax.jit
     def trivial(self, label):
+        dfax = jax.tree_map(lambda x: x[0], self.dfax_array)
         start = 0
-        transitions = jnp.tile(jnp.arange(self.max_size).reshape(-1, 1), (1, self.n_tokens))
-        labels = jnp.zeros((self.max_size,), dtype=bool).at[start].set(label)
+        transitions = jnp.tile(jnp.arange(dfax.max_n_states).reshape(-1, 1), (1, dfax.n_tokens))
+        labels = jnp.zeros((dfax.max_n_states,), dtype=bool).at[start].set(label)
         return DFAx.create(
             start=start,
             transitions=transitions,
