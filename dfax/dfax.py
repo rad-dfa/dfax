@@ -522,3 +522,94 @@ class DFAx:
             labels=labels
         )
 
+    @partial(jax.jit, static_argnames=("n", "k"))
+    def language(self, n: int = 10, k: int = 10) -> tuple[jnp.ndarray, jnp.ndarray]:
+        # Identify rejecting sink states (all self-loops, not accepting)
+        is_self_loop = self.transitions == jnp.arange(self.max_n_states)[:, None]
+        is_sink = jnp.all(is_self_loop, axis=-1)
+        is_rejecting_sink = is_sink & ~self.labels
+
+        # Pre-allocate return matrices padded with -1
+        accept_words = -jnp.ones((n, k), dtype=jnp.int32)
+        reject_words = -jnp.ones((n, k), dtype=jnp.int32)
+
+        # Set a queue capacity sufficient to search paths up to depth k.
+        # Since we're capping outputs at n, a reasonable buffer size keeps JAX memory stable.
+        max_queue_size = n * k * self.n_tokens + 100 # TODO: Fix this!
+
+        queue_state = -jnp.ones((max_queue_size,), dtype=jnp.int32)
+        queue_state = queue_state.at[0].set(self.start)
+
+        queue_words = -jnp.ones((max_queue_size, k), dtype=jnp.int32)
+        queue_depths = jnp.zeros((max_queue_size,), dtype=jnp.int32)
+
+        initial_carry = (
+            queue_state, queue_words, queue_depths,
+            0, 1, # head, tail ptrs
+            accept_words, 0, # accept array, accept count
+            reject_words, 0  # reject array, reject count
+        )
+
+        def cond_fn(carry):
+            _, _, _, head, tail, _, a_count, _, r_count = carry
+            queue_not_empty = head != tail
+            needs_more = (a_count < n) | (r_count < n)
+            return queue_not_empty & needs_more
+
+        def body_fn(carry):
+            (q_state, q_words, q_depths,
+             head, tail,
+             a_words, a_count,
+             r_words, r_count) = carry
+
+            curr_state = q_state[head]
+            curr_word = q_words[head]
+            curr_depth = q_depths[head]
+
+            next_head = (head + 1) % max_queue_size
+
+            # Evaluate terminal criteria for the path arriving at the current state
+            is_accepting = self.labels[curr_state] & (a_count < n) & (curr_depth > 0)
+            is_rejecting = is_rejecting_sink[curr_state] & (r_count < n) & (curr_depth > 0)
+
+            # Record if it's a valid match
+            a_words = jnp.where(is_accepting, a_words.at[a_count].set(curr_word), a_words)
+            a_count = jnp.where(is_accepting, a_count + 1, a_count)
+
+            r_words = jnp.where(is_rejecting, r_words.at[r_count].set(curr_word), r_words)
+            r_count = jnp.where(is_rejecting, r_count + 1, r_count)
+
+            # Continue path expansion if we are below max length limit
+            # AND the current state is not a dead-end terminal sink
+            should_explore = (curr_depth < k) & (~is_rejecting_sink[curr_state]) & (~self.labels[curr_state])
+
+            def transition_scan(loop_carry, token):
+                t_tail, t_q_state, t_q_words, t_q_depths = loop_carry
+                next_s = self.transitions[curr_state, token]
+
+                # Filter out stuttering tokens (where state does not transition)
+                is_stutter = (next_s == curr_state)
+                valid_step = should_explore & (~is_stutter)
+
+                updated_word = curr_word.at[curr_depth].set(token)
+
+                t_q_state = jnp.where(valid_step, t_q_state.at[t_tail].set(next_s), t_q_state)
+                t_q_words = jnp.where(valid_step, t_q_words.at[t_tail].set(updated_word), t_q_words)
+                t_q_depths = jnp.where(valid_step, t_q_depths.at[t_tail].set(curr_depth + 1), t_q_depths)
+                t_tail = jnp.where(valid_step, (t_tail + 1) % max_queue_size, t_tail)
+
+                return (t_tail, t_q_state, t_q_words, t_q_depths), None
+
+            tokens = jnp.arange(self.n_tokens)
+            (next_tail, q_state, q_words, q_depths), _ = jax.lax.scan(
+                transition_scan, (tail, q_state, q_words, q_depths), tokens
+            )
+
+            return (q_state, q_words, q_depths,
+                    next_head, next_tail,
+                    a_words, a_count,
+                    r_words, r_count)
+
+        _, _, _, _, _, final_accept_words, _, final_reject_words, _ = jax.lax.while_loop(cond_fn, body_fn, initial_carry)
+        return final_accept_words, final_reject_words
+
