@@ -22,7 +22,7 @@ class DFAx:
         def step(is_reach: jnp.ndarray) -> jnp.ndarray:
             reach_repeat = jnp.repeat(is_reach, n_tokens)
             dest_counts = jnp.zeros((n_states,), dtype=jnp.int32).at[trans_flat].add(reach_repeat)
-            return dest_counts > 0
+            return is_reach | (dest_counts > 0) # monotone closure
 
         def cond(pair):
             prev_is_reach, curr_is_reach = pair
