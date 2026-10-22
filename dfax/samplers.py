@@ -283,3 +283,28 @@ class RADSampler(DFASampler):
 
         return candidate
 
+
+# Mixture of Reach, Reach-Avoid, and Reach-Avoid-Derived samplers
+@struct.dataclass
+class MixtureSampler(DFASampler):
+    min_size: tuple[int, int, int] = (2, 3, 3) # per component: R, RA, RAD
+    prob_stutter: float = 0.9
+    max_mutations: int = 5
+    probs: tuple[float, float, float] = (1/3, 1/3, 1/3) # R, RA, RAD
+
+    @partial(jax.jit, static_argnums=(0,))
+    def sample(self, key: chex.PRNGKey, accept_set: jnp.array=None, reject_set: jnp.array=None) -> DFAx:
+        if accept_set is not None or reject_set is not None:
+            raise NotImplementedError("Conditioned sampling not implemented for MixtureSampler.")
+        r_min_size, ra_min_size, rad_min_size = self.min_size
+        shared = dict(n_tokens=self.n_tokens, max_size=self.max_size, p=self.p, prob_stutter=self.prob_stutter)
+        samplers = (
+            ReachSampler(min_size=r_min_size, **shared),
+            ReachAvoidSampler(min_size=ra_min_size, **shared),
+            RADSampler(min_size=rad_min_size, max_mutations=self.max_mutations, **shared),
+        )
+        key, subkey = jax.random.split(key)
+        weights = jnp.array(self.probs)
+        idx = jax.random.choice(subkey, len(samplers), p=weights / jnp.sum(weights))
+        return jax.lax.switch(idx, [s.sample for s in samplers], key)
+
