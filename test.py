@@ -2,7 +2,7 @@ import jax
 import time
 import operator
 import jax.numpy as jnp
-from dfax import dfa2dfax, dfax2dfa
+from dfax import DFAx, dfa2dfax, dfax2dfa
 from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler, MixtureSampler
 from dfax.utils import dfax2prompt, prompt2dfax, data2sampler
 
@@ -75,24 +75,143 @@ def test_binary_ops(sampler):
 	print("All tests passed for binary operations.")
 
 
+def bfs_distances(dfax):
+	# Shortest distance from the current state to every state, -1 if unreachable
+	transitions = dfax.transitions.tolist()
+	dist = [-1] * dfax.max_n_states
+	dist[int(dfax.start)] = 0
+	queue = [int(dfax.start)]
+	for s in queue:
+		for t in transitions[s]:
+			if dist[t] < 0:
+				dist[t] = dist[s] + 1
+				queue.append(t)
+	return dist
+
+
+def check_word(dfax, word, max_length, shortest):
+	# find_word returns an accepted word of at most max_length tokens padded with -1, or all -1 if it finds none
+	dist = bfs_distances(dfax)
+	n_reach = sum(d >= 0 for d in dist)
+	min_length = min((d for d, label in zip(dist, dfax.labels.tolist()) if label and d >= 0), default=None)
+	n = int(jnp.sum(word != -1))
+	prefix = word[:n].tolist()
+	adv_dfax = dfax.advance(word)
+	accepted = bool(adv_dfax.labels[adv_dfax.start])
+
+	assert word.shape == (max_length,) and word.dtype == jnp.int32
+	assert jnp.all(word[n:] == -1) and all(0 <= a < dfax.n_tokens for a in prefix), f"Malformed word {word}."
+	assert accepted == dfax2dfa(dfax).label(prefix)
+
+	if min_length is None or min_length > max_length:
+		assert n == 0, f"Found {word} but no word of length at most {max_length} is accepted."
+	elif shortest or min_length == 0:
+		assert accepted and n == min_length, f"Found {word} but the shortest accepted word has length {min_length}."
+	elif max_length >= n_reach - 1:
+		# The length limit cannot bind, so DFS reaches an accepting state along a simple path
+		assert accepted and min_length <= n <= n_reach - 1, f"DFS found {word} with {n_reach} reachable states."
+	else:
+		assert accepted or n == 0, f"DFS found {word}, which is not accepted."
+
+
 def test_find_word(sampler):
 	key = KEY
 
 	for i in range(N_SAMPLES * 10):
-		key, subkey = jax.random.split(key)
-		dfax = sampler.sample(subkey)
-		word = dfax.find_word(key)
+		key, subkey1, subkey2 = jax.random.split(key, 3)
+		dfax = sampler.sample(subkey1)
+		prod = dfax ^ sampler.sample(subkey2)
 
-		adv_dfax = dfax.advance(word).minimize()
-		dfa_word = word[:jnp.sum(word != -1)].tolist()
-		adv_dfa = dfax2dfa(dfax).advance(dfa_word).minimize()
+		for shortest in [False, True]:
+			word = dfax.find_word(key, shortest=shortest)
+			check_word(dfax, word, dfax.max_n_states, shortest)
+			check_word(prod, prod.find_word(key, shortest=shortest), prod.max_n_states, shortest)
 
-		assert adv_dfax == dfa2dfax(adv_dfa)
-		assert dfax2dfa(adv_dfax) == adv_dfa
+			adv_dfax = dfax.advance(word).minimize()
+			dfa_word = word[:jnp.sum(word != -1)].tolist()
+			adv_dfa = dfax2dfa(dfax).advance(dfa_word).minimize()
+
+			assert adv_dfax == dfa2dfax(adv_dfa)
+			assert dfax2dfa(adv_dfax) == adv_dfa
 
 		print(f"Test completed for {i + 1} samples.", end="\r")
 	
 	print("All tests passed for find word.".ljust(40))
+
+
+def make_dfax(transitions, labels, start=0):
+	return DFAx.create(start=start, transitions=jnp.array(transitions), labels=jnp.array(labels))
+
+
+def test_find_word_cases():
+	keys = jax.random.split(KEY, 100)
+
+	def words(dfax, max_length=None, shortest=False):
+		# Checks find_word over all keys under vmap and returns the distinct unpadded words
+		batch = jax.vmap(lambda k: dfax.find_word(k, max_length=max_length, shortest=shortest))(keys)
+		for word in batch:
+			check_word(dfax, word, dfax.max_n_states if max_length is None else max_length, shortest)
+		return {tuple(a for a in word.tolist() if a != -1) for word in batch}
+
+	# 0 -a-> 1 -a-> 3 -a-> 4 and 0 -b-> 2 -a-> 4: DFS may take the detour, BFS never does
+	detour = [[1, 2], [3, 1], [4, 2], [4, 3], [4, 4]]
+	labels = [False, False, False, False, True]
+	assert words(make_dfax(detour, labels), shortest=True) == {(1, 0)}
+	assert words(make_dfax(detour, labels)) == {(0, 0, 0), (1, 0)}
+	for shortest in [False, True]:
+		assert words(make_dfax(detour, labels, start=1), shortest=shortest) == {(0, 0)}
+	print("Finished running tests for detour.")
+
+	# a and b both accept in one step, c in two: the tie is broken at random and c a is never taken
+	tie = make_dfax([[1, 1, 2], [1, 1, 1], [1, 2, 2]], [False, True, False])
+	for shortest in [False, True]:
+		assert words(tie, shortest=shortest) == {(0,), (1,)}
+	print("Finished running tests for tie.")
+
+	# The empty word, an accepting state that is never reached, and no accepting state at all
+	empty = [
+		make_dfax([[1, 0], [1, 1]], [True, False]),
+		make_dfax([[1, 0], [1, 1]], [False, True], start=1),
+		make_dfax([[1, 0], [0, 1], [2, 2]], [False, False, True]),
+		make_dfax([[1, 0], [2, 1], [2, 2]], [False, False, False]),
+	]
+	for dfax in empty:
+		for shortest in [False, True]:
+			for max_length in [None, 1, 5]:
+				assert words(dfax, max_length, shortest) == {()}
+	print("Finished running tests for empty words.")
+
+	# 0 -a-> 1 -a-> ... -a-> 5 with b stuttering: a^5 fits within max_length or nothing is found
+	chain = make_dfax([[min(s + 1, 5), s] for s in range(6)], [s == 5 for s in range(6)])
+	for max_length, expected in [(None, {(0,) * 5}), (5, {(0,) * 5}), (4, {()}), (8, {(0,) * 5})]:
+		for shortest in [False, True]:
+			assert words(chain, max_length, shortest) == expected
+	print("Finished running tests for chain.")
+
+	# 0 -a-> 1 -a-> 2 -a-> 3 -a-> 4 and 0 -b-> 5 -a-> 3: with max_length=3, DFS misses b a a when it goes down the chain first
+	limited = make_dfax([[1, 5], [2, 1], [3, 2], [4, 3], [4, 4], [3, 5]], [False, False, False, False, True, False])
+	assert words(limited, shortest=True) == {(1, 0, 0)}
+	assert words(limited) == {(0, 0, 0, 0), (1, 0, 0)}
+	assert words(limited, 3, shortest=True) == {(1, 0, 0)}
+	assert words(limited, 3) == {(1, 0, 0), ()}
+	print("Finished running tests for limited length.")
+
+	key = KEY
+	for i in range(N_SAMPLES):
+		key, subkey1, subkey2, subkey3, subkey4 = jax.random.split(key, 5)
+		dfax = DFAx.create(
+			start=jax.random.randint(subkey1, (), 0, 8),
+			transitions=jax.random.randint(subkey2, (8, 3), 0, 8),
+			labels=jax.random.bernoulli(subkey3, 0.15, (8,)),
+		)
+		for max_length in [None, 1, 3, 12]:
+			for shortest in [False, True]:
+				word = dfax.find_word(subkey4, max_length=max_length, shortest=shortest)
+				check_word(dfax, word, dfax.max_n_states if max_length is None else max_length, shortest)
+		print(f"Test completed for {i + 1} samples.", end="\r")
+	print("Finished running tests for random DFAs.")
+
+	print("All tests passed for find word cases.")
 
 
 def test_shrink(dfa_sizes):
@@ -479,6 +598,7 @@ def main():
 	test_prompt_and_advance(sampler)
 	test_binary_ops(sampler)
 	test_find_word(sampler)
+	test_find_word_cases()
 	test_shrink(dfa_sizes)
 	test_expand(sampler, expand_size)
 	test_reach_sampler(sampler.max_size)

@@ -294,28 +294,34 @@ class DFAx:
             labels=minimized_labels
         )
 
-    @partial(jax.jit, static_argnames="max_length")
-    def find_word(self, key: chex.PRNGKey, max_length: int = None) -> jnp.ndarray:
+    @partial(jax.jit, static_argnames=("max_length", "shortest"))
+    def find_word(self, key: chex.PRNGKey, max_length: int = None, shortest: bool = False) -> jnp.ndarray:
         if max_length is None:
             max_length = self.max_n_states
 
-        stack     = (-jnp.ones((max_length,), dtype=jnp.int32)).at[0].set(self.start)
-        stack_ptr = 1
-        visited   = jnp.zeros((max_length,), dtype=bool).at[self.start].set(True)
-        parent    = -jnp.ones((max_length,), dtype=jnp.int32)
-        token_to  = -jnp.ones((max_length,), dtype=jnp.int32)
-        depth     = jnp.zeros((max_length,), dtype=jnp.int32)
+        # States enter the frontier at most once; DFS pops from the tail, BFS (shortest word) from the head
+        frontier  = (-jnp.ones((self.max_n_states,), dtype=jnp.int32)).at[0].set(self.start)
+        head      = 0
+        tail      = 1
+        visited   = jnp.zeros((self.max_n_states,), dtype=bool).at[self.start].set(True)
+        parent    = -jnp.ones((self.max_n_states,), dtype=jnp.int32)
+        token_to  = -jnp.ones((self.max_n_states,), dtype=jnp.int32)
+        depth     = jnp.zeros((self.max_n_states,), dtype=jnp.int32)
         found     = -1
         
         def cond(carry):
-            _, stack_ptr, _, _, _, _, _, found = carry
-            return (stack_ptr > 0) & (found < 0)
+            _, head, tail, _, _, _, _, _, found = carry
+            return (head < tail) & (found < 0)
         
         def body(carry):
-            key, stack_ptr, stack, visited, parent, token_to, depth, found = carry
+            key, head, tail, frontier, visited, parent, token_to, depth, found = carry
 
-            stack_ptr    = stack_ptr - 1
-            state        = stack[stack_ptr]
+            if shortest:
+                state    = frontier[head]
+                head     = head + 1
+            else:
+                tail     = tail - 1
+                state    = frontier[tail]
             curr_depth   = depth[state]
 
             is_accepting = self.labels[state].astype(bool)
@@ -325,31 +331,31 @@ class DFAx:
             token_order  = jax.random.permutation(subkey, self.n_tokens)
             
             def push(i, carry):
-                visited, stack, stack_ptr, parent, token_to, depth = carry
+                visited, frontier, tail, parent, token_to, depth = carry
                 token = token_order[i]
                 ns    = self.transitions[state, token]
 
                 do_push   = ~is_accepting & (curr_depth < max_length) & ~visited[ns]
-                stack     = stack.at[stack_ptr].set(jnp.where(do_push, ns, stack[stack_ptr]))
-                stack_ptr = stack_ptr + do_push.astype(jnp.int32)
+                frontier  = frontier.at[tail].set(jnp.where(do_push, ns, frontier[tail]))
+                tail      = tail + do_push.astype(jnp.int32)
                 visited   = visited.at[ns].set(visited[ns] | do_push)
                 parent    = parent.at[ns].set(jnp.where(do_push, state, parent[ns]))
                 token_to  = token_to.at[ns].set(jnp.where(do_push, token, token_to[ns]))
                 depth     = depth.at[ns].set(jnp.where(do_push, curr_depth + 1, depth[ns]))
 
-                return visited, stack, stack_ptr, parent, token_to, depth
+                return visited, frontier, tail, parent, token_to, depth
 
-            visited, stack, stack_ptr, parent, token_to, depth = jax.lax.fori_loop(
-                0, self.n_tokens, push, (visited, stack, stack_ptr, parent, token_to, depth)
+            visited, frontier, tail, parent, token_to, depth = jax.lax.fori_loop(
+                0, self.n_tokens, push, (visited, frontier, tail, parent, token_to, depth)
             )
             
-            return key, stack_ptr, stack, visited, parent, token_to, depth, found
+            return key, head, tail, frontier, visited, parent, token_to, depth, found
         
-        _, _, _, _, parent, token_to, depth, found = jax.lax.while_loop(
-            cond, body, (key, stack_ptr, stack, visited, parent, token_to, depth, found)
+        _, _, _, _, _, parent, token_to, depth, found = jax.lax.while_loop(
+            cond, body, (key, head, tail, frontier, visited, parent, token_to, depth, found)
         )
 
-        word_length = depth[found]
+        word_length = jnp.where(found >= 0, depth[found], 0)
         word        = -jnp.ones((max_length,), dtype=jnp.int32)
 
         def trace(i, carry):
