@@ -3,7 +3,7 @@ import time
 import operator
 import jax.numpy as jnp
 from dfax import dfa2dfax, dfax2dfa
-from dfax.samplers import ReachAvoidSampler
+from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler, MixtureSampler
 from dfax.utils import dfax2prompt, prompt2dfax
 
 
@@ -160,6 +160,79 @@ def test_expand(sampler, expand_size):
 	print("All tests passed for expand.".ljust(40))
 
 
+def test_mixture(max_size):
+	key = KEY
+
+	# (name, mixture, components it should reproduce in R, RA, RAD order)
+	mixtures = [
+		(
+			"default",
+			MixtureSampler(max_size=max_size),
+			# Class defaults give the expected min sizes (2, 3, 3); p is shared, so RAD gets None too
+			[ReachSampler(max_size=max_size, p=None), ReachAvoidSampler(max_size=max_size, p=None), RADSampler(max_size=max_size, p=None)]
+		),
+		(
+			"custom",
+			MixtureSampler(n_tokens=5, max_size=max_size, p=0.5, prob_stutter=0.5, max_mutations=2, min_size=(3, 4, 4), probs=(2, 1, 1)),
+			[
+				ReachSampler(n_tokens=5, max_size=max_size, p=0.5, prob_stutter=0.5, min_size=3),
+				ReachAvoidSampler(n_tokens=5, max_size=max_size, p=0.5, prob_stutter=0.5, min_size=4),
+				RADSampler(n_tokens=5, max_size=max_size, p=0.5, prob_stutter=0.5, min_size=4, max_mutations=2)
+			]
+		),
+		(
+			"RA only",
+			MixtureSampler(max_size=max_size, probs=(0, 1, 0)),
+			[ReachSampler(max_size=max_size, p=None), ReachAvoidSampler(max_size=max_size, p=None), RADSampler(max_size=max_size, p=None)]
+		),
+	]
+
+	for name, mixture, components in mixtures:
+		probs = jnp.array(mixture.probs) / jnp.sum(jnp.array(mixture.probs))
+		sample_keys, dfaxs = [], []
+
+		for i in range(N_SAMPLES):
+			key, subkey = jax.random.split(key)
+			dfax = mixture.sample(subkey)
+
+			assert dfax.transitions.shape == (mixture.max_size, mixture.n_tokens)
+			assert all(a.shape == b.shape for a, b in zip(jax.tree.leaves(mixture.trivial(True)), jax.tree.leaves(dfax)))
+			assert dfax == dfax.minimize()
+
+			# The mixture uses the first half of the split for the component and the second to choose it
+			component_key, choice_key = jax.random.split(subkey)
+			idx = jax.random.choice(choice_key, len(components), p=probs)
+			assert probs[idx] > 0
+			assert dfax == components[idx].sample(component_key), f"Mixture sample does not match component {int(idx)} for sample {i + 1}."
+
+			sample_keys.append(subkey)
+			dfaxs.append(dfax)
+
+			print(f"Test completed for {i + 1} samples ({name} mixture).".ljust(50), end="\r")
+
+		# Sampling under vmap gives the same DFAs
+		vmap_dfaxs = jax.vmap(mixture.sample)(jnp.stack(sample_keys))
+		seq_dfaxs = jax.tree.map(lambda *xs: jnp.stack(xs), *dfaxs)
+		assert jnp.all(jax.vmap(lambda a, b: a == b)(vmap_dfaxs, seq_dfaxs))
+
+		# Components are chosen with the given (normalized) probabilities
+		key, subkey = jax.random.split(key)
+		choice_keys = jax.vmap(lambda k: jax.random.split(k)[1])(jax.random.split(subkey, N_SAMPLES * 30))
+		idxs = jax.vmap(lambda k: jax.random.choice(k, len(components), p=probs))(choice_keys)
+		freqs = jnp.array([jnp.mean(idxs == j) for j in range(len(components))])
+		assert jnp.all(jnp.abs(freqs - probs) < 0.05), f"Component frequencies {freqs} do not match probabilities {probs}."
+
+		print(f"Finished running tests for {name} mixture.".ljust(50))
+
+	try:
+		MixtureSampler(max_size=max_size).sample(KEY, accept_set=jnp.zeros((1, 1), dtype=jnp.int32))
+		assert False, "Conditioned sampling should not be supported by MixtureSampler."
+	except NotImplementedError:
+		pass
+
+	print("All tests passed for mixture sampler.")
+
+
 def main():
 	sampler = ReachAvoidSampler(max_size=5, p=None)
 	dfa_sizes = [5, 10, 20]
@@ -170,6 +243,7 @@ def main():
 	test_find_word(sampler)
 	test_shrink(dfa_sizes)
 	test_expand(sampler, expand_size)
+	test_mixture(sampler.max_size)
 
 
 if __name__ == '__main__':

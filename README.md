@@ -77,15 +77,18 @@ dfax.reward(binary=True) # Returns a binary reward
 ```
 
 
-Sample from different DFA distributions: `Reach` samples DFAs ordering alphabet symbols, `ReachAvoid` samples `Reach` DFAs but also includes `Avoid` constraints, and `ReachAvoidDerived` samples randomly mutated `Reach` and `ReachAvoid` DFAs.
+Sample from different DFA distributions: `Reach` samples DFAs ordering alphabet symbols, `ReachAvoid` samples `Reach` DFAs but also includes `Avoid` constraints, `ReachAvoidDerived` samples randomly mutated `Reach` and `ReachAvoid` DFAs, and `Mixture` samples from `Reach`, `ReachAvoid`, and `ReachAvoidDerived` with given probabilities (uniform by default).
 
 ```python
 import jax
-from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler
+from dfax.samplers import ReachSampler, ReachAvoidSampler, RADSampler, MixtureSampler
 
 key = jax.random.PRNGKey(0)
 sampler = ReachAvoidSampler()
 
+dfax = sampler.sample(key)
+
+sampler = MixtureSampler(probs=(0.5, 0.25, 0.25)) # Reach, ReachAvoid, ReachAvoidDerived
 dfax = sampler.sample(key)
 ```
 
