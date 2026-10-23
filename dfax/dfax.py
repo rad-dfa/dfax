@@ -494,6 +494,16 @@ class DFAx:
             jnp.where(is_accept, 1.0, jnp.where(is_sink, -1.0, 0.0))
         )
 
+    @jax.jit
+    def dist2accept(self) -> float:
+        # Value iteration for the shortest distance to acceptance, which is at most max_n_states - 1
+        def step(_, dist):
+            return jnp.where(self.labels, 0.0, 1.0 + jnp.min(dist[self.transitions], axis=1))
+
+        dist = jax.lax.fori_loop(0, self.max_n_states, step, jnp.where(self.labels, 0.0, jnp.inf))
+
+        return dist[self.start]
+
     def shrink(self) -> "DFAx":
         is_reach = self.is_reach
         reach_i = jnp.cumsum(is_reach.astype(jnp.int32)) - 1

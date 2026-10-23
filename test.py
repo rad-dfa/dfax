@@ -89,6 +89,12 @@ def bfs_distances(dfax):
 	return dist
 
 
+def accept_distance(dfax):
+	# Shortest distance from the current state to an accepting state, inf if none is reachable
+	dist = bfs_distances(dfax)
+	return min((d for d, label in zip(dist, dfax.labels.tolist()) if label and d >= 0), default=float("inf"))
+
+
 def check_word(dfax, word, max_length, shortest):
 	# find_word returns an accepted word of at most max_length tokens padded with -1, or all -1 if it finds none
 	dist = bfs_distances(dfax)
@@ -212,6 +218,87 @@ def test_find_word_cases():
 	print("Finished running tests for random DFAs.")
 
 	print("All tests passed for find word cases.")
+
+
+def check_dist(dfax, key):
+	# dist2accept matches the BFS oracle, reward, and the shortest accepted word, and ignores padding
+	dist = dfax.dist2accept()
+	expected = accept_distance(dfax)
+	assert dist.shape == () and dist.dtype == jnp.float32
+	assert dist == expected, f"dist2accept is {dist} but the oracle gives {expected}."
+	assert (dist == 0) == (dfax.reward() == 1)
+	assert dfax.reward() != -1 or dist == jnp.inf
+	n = int(jnp.sum(dfax.find_word(key, shortest=True) != -1))
+	assert n == (dist if dist < jnp.inf else 0), f"Shortest word has length {n} but dist2accept is {dist}."
+	assert dfax.expand(dfax.max_n_states + 3).dist2accept() == dist
+	return dist
+
+
+def test_dist2accept(sampler):
+	key = KEY
+	inf = float("inf")
+
+	# Accepting start, rejecting sink, an accepting state never reached from a non-sink cycle, the chain, and the detour
+	chain = [[min(s + 1, 5), s] for s in range(6)]
+	detour = [[1, 2], [3, 1], [4, 2], [4, 3], [4, 4]]
+	unreached = make_dfax([[1, 0], [0, 1], [2, 2]], [False, False, True])
+	cases = [
+		(make_dfax([[1, 0], [1, 1]], [True, False]), 0),
+		(make_dfax([[1, 0], [1, 1]], [True, False], start=1), inf),
+		(unreached, inf),
+		*[(make_dfax(chain, [s == 5 for s in range(6)], start=s), 5 - s) for s in [0, 2, 5]],
+		*[(make_dfax(detour, [s == 4 for s in range(5)], start=s), d) for s, d in [(0, 2), (1, 2), (3, 1)]],
+	]
+	for dfax, expected in cases:
+		assert check_dist(dfax, key) == expected
+	assert unreached.reward() == 0
+	print("Finished running tests for hand-built DFAs.")
+
+	samples, randoms = [], []
+	for i in range(N_SAMPLES):
+		key, subkey1, subkey2, subkey3, subkey4 = jax.random.split(key, 5)
+		dfax = sampler.sample(subkey1)
+		samples.append(dfax)
+
+		# The unminimized product has dead states that are not sinks
+		prod = dfax ^ sampler.sample(subkey2)
+		for d in [dfax, prod, prod.minimize()]:
+			check_dist(d, subkey4)
+
+		# Each token of a shortest word brings acceptance one step closer
+		word = dfax.find_word(subkey4, shortest=True)
+		dist = check_dist(dfax, subkey4)
+		for a in word[:int(jnp.sum(word != -1))].tolist():
+			dfax = dfax.advance(a).minimize()
+			assert check_dist(dfax, subkey4) == dist - 1
+			dist = dist - 1
+		assert dist == 0
+
+		# Along a random walk on minimized DFAs, inf is exactly a rejecting sink
+		dfax = samples[-1]
+		for a in jax.random.randint(subkey3, (5,), 0, sampler.n_tokens).tolist():
+			dfax = dfax.advance(a).minimize()
+			assert (check_dist(dfax, subkey4) == inf) == (dfax.reward() == -1)
+
+		# Arbitrary DFAs, which can start anywhere and have unreachable or no accepting states
+		key, subkey1, subkey2, subkey3 = jax.random.split(key, 4)
+		dfax = DFAx.create(
+			start=jax.random.randint(subkey1, (), 0, 8),
+			transitions=jax.random.randint(subkey2, (8, 3), 0, 8),
+			labels=jax.random.bernoulli(subkey3, 0.15, (8,)),
+		)
+		check_dist(dfax, subkey4)
+		randoms.append(dfax)
+
+		print(f"Test completed for {i + 1} samples.", end="\r")
+
+	# Batched DFAs give the same distances under vmap
+	for dfaxs in [samples, randoms]:
+		batch = jax.tree.map(lambda *xs: jnp.stack(xs), *dfaxs)
+		dists = jax.vmap(lambda d: d.dist2accept())(batch)
+		assert jnp.array_equal(dists, jnp.stack([d.dist2accept() for d in dfaxs]))
+
+	print("All tests passed for dist2accept.".ljust(40))
 
 
 def test_shrink(dfa_sizes):
@@ -599,6 +686,7 @@ def main():
 	test_binary_ops(sampler)
 	test_find_word(sampler)
 	test_find_word_cases()
+	test_dist2accept(sampler)
 	test_shrink(dfa_sizes)
 	test_expand(sampler, expand_size)
 	test_reach_sampler(sampler.max_size)
